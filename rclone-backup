@@ -26,7 +26,7 @@ Usage: $whoami [-h|--help] [-v|--verbose [..]] [-q|--quiet] [-n|--dryrun]
     all               - verify all files in backup
     data=[<]number[%] - verify the specified amount of data (bytes or
                         percentage of total data size, "<" means hard limit)
-    files=number[%]   - verify the specified number of files (default 1,000)
+    files=number[%]   - verify the specified number of files
     age=timespec      - verify files up to the specified age (rclone syntax)
 EOF
 $ENV{RCLONE_FAST_LIST} = 'true';
@@ -113,73 +113,96 @@ sub newest {
           $newest, "\n");
 }
 
-sub verify {
-    my($args, $config) = @_;
-    my $errors = 0;
+sub parse_verify {
+    my($args) = @_;
+    my %verify;
 
-    my($filter_fh, $filter_filename) = tempfile();
-    binmode($filter_fh, ":utf8");
-
-    my($verify_all,
-       $verify_size, $verify_size_pct, $verify_size_hard,
-       $verify_count, $verify_count_pct,
-       $verify_age);
     while (my($type, $spec) = each %{$args->{verify}}) {
         my $hard = $spec =~ s/^<//;
         my $pct = $spec =~ s/%$//;
         if ($type eq 'all') {
-            $verify_all = 1;
+            $verify{all} = 1;
             next;
         }
         die "Verify spec \"$args->{verify}->{$type}\" is not a number\n$usage"
             if ($type ne 'age' and $spec !~ /^\d+$/);
         if ($type eq 'data') {
-            $verify_size = $spec;
-            $verify_size_pct = $pct;
-            $verify_size_hard = $hard;
+            $verify{size} = $spec;
+            $verify{size_pct} = $pct;
+            $verify{size_hard} = $hard;
             next;
         }
         elsif ($type eq 'files') {
-            $verify_count = $spec;
-            $verify_count_pct = $pct;
+            $verify{count} = $spec;
+            $verify{count_pct} = $pct;
             next;
         }
         elsif ($type eq 'age') {
-            $verify_age = $spec;
+            $verify{age} = $spec;
+            $verify{since} = (time() - &parse_age($spec));
         }
         else {
             die "Unrecognized verify type \"$type\"\n$usage";
         }
     }
-    if ($verify_size or $verify_count or $verify_age) {
+    if ($verify{size} or $verify{count} or $verify{age}) {
         die "Verify condition \"all\" conflicts with other conditions\n$usage"
-            if ($verify_all);
+            if ($verify{all});
     }
     else {
-        $verify_all = 1;
+        $verify{all} = 1;
     }
+    return \%verify;
+}
 
-    my(@cmd) = &rclone_base_cmd($args, $config);
-    my(@verify_cmd) = @cmd;
+sub parse_age {
+    my($age) = @_;
+    local $_ = $age;
+    my($suffix);
+    if (s/([smhdwMy])$//) {
+        $suffix = $1;
+    }
+    if (! /^\d+$/) {
+        die "Can't parse age $age\n";
+    }
+    if ($suffix) {
+        my(%multipliers) = (
+            s => 1,
+            m => 60,
+            h => 60 * 60,
+            d => 60 * 60 * 24,
+            w => 60 * 60 * 24 * 7,
+            M => 60 * 60 * 24 * (365.25 / 12),
+            y => 60 * 60 * 24 * 365.25
+            );
+        $_ *= $multipliers{$suffix};
+    }
+    return $_;
+}
 
-    if ($verify_size or $verify_count) {
-        my $implicit_count_limit = 0;
-        if (! $verify_count) {
-            $verify_count = 1000;
-            $implicit_count_limit = 1;
-        }
-        my(@ls_cmd) = (@cmd, &get_filters($config));
-        if ($verify_age) {
-            push(@ls_cmd, "--max-age", $verify_age);
+sub verify {
+    my($args, $config) = @_;
+
+    my($verify) = &parse_verify($args);
+    my($hit) = {};
+    my($listed, @files_to_verify);
+
+    if ($verify->{size} or $verify->{count}) {
+        $listed = 1;
+        my(@ls_cmd) = (&rclone_base_cmd($args, $config),
+                       &get_filters($config));
+        if ($verify->{age}) {
+            push(@ls_cmd, "--max-age", time() - $verify->{since});
         }
         push(@ls_cmd, "ls", $config->{source});
         my(@files, %sizes);
         my $total_size = 0;
         print "Listing files on source...\n" if ($verbose);
-        if ($verify_age) {
+        if ($verify->{age}) {
             print("(Limiting listing and verify to files less than ",
-                  "$verify_age old)\n") if ($verbose);
+                  $verify->{age}, " old)\n") if ($verbose);
         }
+        print("Executing @ls_cmd\n") if ($verbose);
         open(LS, "-|", @ls_cmd) or die;
         while (<LS>) {
             chomp;
@@ -199,35 +222,39 @@ sub verify {
         printf("Done (%d files, total size %s)\n",
                scalar @files, &unparse_bytes($total_size)) if ($verbose);
 
-        if ($verify_size_pct) {
-            $verify_size = int($verify_size / 100 * $total_size) or 1;
+        if ($verify->{size_pct}) {
+            $verify->{size} = int($verify->{size} / 100 * $total_size) or 1;
         }
-        if ($verify_count_pct) {
-            $verify_count = int($verify_count / 100 * scalar @files) or 1;
+        if ($verify->{count_pct}) {
+            $verify->{count} = int($verify->{count} / 100 * scalar @files)
+                or 1;
         }
 
         my $verified_size = 0;
         my $verified_count = 0;
-        my @files_to_verify;
         while (@files) {
-            if ($verify_count and $verified_count == $verify_count) {
-                warn("Limiting verify to 1,000 files; rclone performance ",
-                     "chokes on too many files\n") if ($implicit_count_limit);
+            if ($verify->{count} and $verified_count == $verify->{count}) {
+                $hit->{count_limit} = 1;
                 last;
             }
-            if ($verify_size) {
-                if ($verified_size >= $verify_size) {
+            if ($verify->{size}) {
+                if ($verified_size >= $verify->{size}) {
+                    $hit->{size_limit} = 1;
                     last;
                 }
-                if ($verify_size_hard) {
-                    @files = grep($sizes{$_} < $verify_size - $verified_size,
-                                  @files);
-                    last if (! @files);
+                if ($verify->{size_hard}) {
+                    @files =
+                        grep($sizes{$_} < $verify->{size} - $verified_size,
+                             @files);
+                    if (! @files) {
+                        $hit->{size_limit} = 1;
+                        last;
+                    }
                 }
             }
 
             my $file;
-            if ($verify_size) {
+            if ($verify->{size}) {
                 # Strongly prefer larger files, to minimize the amount of money
                 # we pay for the storage transactions necessary for
                 # verification.
@@ -259,45 +286,70 @@ sub verify {
             push(@files_to_verify, $file);
         }
 
-        foreach my $file (@files_to_verify) {
-            $file =~ s/([*?\[\]\{\}\\])/\\$1/g;
-            print($filter_fh "+ /$file\n") or die;
+        if ($hit->{size_limit}) {
+            print("Limiting verify to ", &unparse_bytes($verified_size),
+                  "...\n") if ($verbose);
         }
-        print($filter_fh "- *\n") or die;
-        seek($filter_fh, 0, 0); # Force flush
-        push(@verify_cmd, "--filter-from", $filter_filename);
+        if ($hit->{count_limit}) {
+            print("Limiting verify to $verified_count files...\n")
+                if ($verbose);
+        }
     }
 
-    if ($verify_all) {
+    if ($verify->{all}) {
         print "Verifying entire backup...\n" if ($verbose);
     }
-    if ($verify_size) {
-        print("Limiting verify to ", &unparse_bytes($verify_size),
-              "...\n") if ($verbose);
-    }
-    if ($verify_count) {
-        print "Limiting verify to $verify_count files...\n" if ($verbose);
-    }
 
+    my(@cmd) = &rclone_base_cmd($args, $config);
     # `rclone check` produces NOTICE messages which we don't want unless the
     # user has specified verbosity.
-    if (! $verbose) {
-        push(@verify_cmd, "--quiet");
-    }
-    if (! ($verify_size or $verify_count)) {
-        if ($verify_age) {
-            push(@verify_cmd, "--max-age", $verify_age);
+    push(@cmd, "--quiet") if (! $verbose);
+    my(@cmd_tail) = ("check", "--download", $config->{source},
+                     $config->{destination});
+    my $errors = 0;
+
+    if (! $listed) {
+        if ($verify->{age}) {
+            print("(Limiting verify to files less than ",
+                  $verify->{age}, " old)\n") if ($verbose);
+            push(@cmd, "--max-age", time() - $verify->{since});
         }
-        push(@verify_cmd, &get_filters($config));
+        push(@cmd, &get_filters($config), @cmd_tail);
+        print("Executing @cmd\n") if ($verbose);
+        if (system(@cmd)) {
+            $errors++;
+        }
     }
-    push(@verify_cmd, "check", "--download", $config->{source},
-         $config->{destination});
-    print("Executing @verify_cmd\n") if ($verbose > 1);
-    if (system(@verify_cmd)) {
-        $errors++;
+    else {
+        my($filter_fh, $filter_filename) = tempfile();
+        binmode($filter_fh, ":utf8");
+        my $count = 0;
+        while (my $file = shift @files_to_verify) {
+            $file =~ s/([*?\[\]\{\}\\])/\\$1/g;
+            print($filter_fh "+ /$file\n") or die;
+            if (++$count == 1000 or !@files_to_verify) {
+                print($filter_fh "- *\n") or die;
+                seek($filter_fh, 0, 0); # Force flush
+                my(@this_cmd) = @cmd;
+                push(@this_cmd, "--filter-from", $filter_filename);
+                if ($verify->{age}) {
+                    push(@this_cmd, "--max-age", time() - $verify->{since});
+                }
+                push(@this_cmd, @cmd_tail);
+                print("Executing @this_cmd\n") if ($verbose);
+                if (system(@this_cmd)) {
+                    $errors++;
+                }
+                truncate($filter_fh, 0);
+            }
+        }
+    }
+    if ($errors) {
         warn("Verify failed\n");
     }
-    print("Verify successful\n") if ($verbose and ! $errors);
+    else {
+        print("Verify successful\n") if ($verbose);
+    }
     exit $errors ? 1 : 0;
 }
 
