@@ -278,7 +278,7 @@ sub verify {
     if ($verify_count) {
         print "Limiting verify to $verify_count files...\n" if ($verbose);
     }
-        
+
     # `rclone check` produces NOTICE messages which we don't want unless the
     # user has specified verbosity.
     if (! $verbose) {
@@ -340,7 +340,7 @@ sub get_filters {
     }
     return @filters;
 }
-         
+
 sub rclone_base_cmd {
     my($args, $config) = @_;
     my $copy_links = defined($config->{copy_links}) ? $config->{copy_links} :
@@ -454,7 +454,7 @@ sub parse_config {
             next;
         }
         if ($section eq "test-filters") {
-            # These are only used when testing filters, 
+            # These are only used when testing filters,
             next;
         }
         # Only remaining section is [filters]
@@ -482,4 +482,3 @@ sub parse_bool {
         die "Unrecognized boolean value: $_\n";
     }
 }
-
