@@ -8,6 +8,7 @@ use File::Basename;
 use File::Slurp;
 use File::Temp 'tempfile';
 use Getopt::Long;
+use Time::Local;
 
 my $whoami = basename $0;
 my $usage = <<EOF;
@@ -277,7 +278,8 @@ sub verify {
 
 sub archive_special_files {
     my($args, $config) = @_;
-    my $tar_file = $args->{dryrun} ? "/dev/null" : "special-files.tar.gz";
+    my $tar_file = $args->{dryrun} ? "/dev/null" :
+        "$config->{source}/special-files.tar.gz";
     my $verbose = $args->{verbose} ? "--verbose" : "";
     my $cmd = "set -e; " .
         "cd $config->{source}; " .
@@ -285,6 +287,22 @@ sub archive_special_files {
         "tar --null --files-from - --create --gzip --file $tar_file $verbose";
     print "$cmd\n" if ($verbose);
     system($cmd) and die;
+    return if ($args->{dryrun});
+    my(@cmd) = ("tar", "tvf", $tar_file, "--full-time");
+    print("@cmd\n") if ($verbose);
+    open(TAR, "-|", @cmd) or die;
+    my($newest) = 0;
+    while (<TAR>) {
+        my($Y, $M, $D, $h, $m, $s) =
+            /(\d+)-0*(\d+)-0*(\d+) 0*(\d+):0*(\d+):0*(\d+)/ or next;
+        my($stamp) = timelocal($s, $m, $h, $D, $M-1, $Y);
+        if ($stamp > $newest) {
+            $newest = $stamp;
+        }
+    }
+    close(TAR) or die;
+    print("utime($newest, $newest, $tar_file)\n") if ($verbose);
+    utime($newest, $newest, $tar_file) or die;
 }
 
 sub get_filters {
