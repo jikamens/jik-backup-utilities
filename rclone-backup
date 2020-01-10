@@ -12,8 +12,12 @@ use Getopt::Long;
 my $whoami = basename $0;
 my $usage = <<EOF;
 Usage: $whoami [-h|--help] [-v|--verbose [..]] [-q|--quiet] [-n|--dryrun]
-	[--copy-links] [--rclone-config=file]
-	[--ls|--verify condition[,...]|--filters] rclone-spec-file
+        [--copy-links] [--rclone-config=file]
+        [--ls|--verify condition [...]|--filters] rclone-spec-file
+
+    --ls       List files in source
+    --verify   Verify (some) files in source against files in destination
+    --filters  List file filters in backup configuration
 
     Valid --verify conditions:
 
