@@ -14,9 +14,10 @@ my $whoami = basename $0;
 my $usage = <<EOF;
 Usage: $whoami [-h|--help] [-v|--verbose [..]] [-q|--quiet] [-n|--dryrun]
         [--copy-links] [--rclone-config=file]
-        [--ls|--verify condition [...]|--filters] rclone-spec-file
+        [--ls|--newest|--verify condition [...]|--filters] rclone-spec-file
 
     --ls       List files in source
+    --newest   Print timestamp and path of newest file in source
     --verify   Verify (some) files in source against files in destination
     --filters  List file filters in backup configuration
 
@@ -39,6 +40,8 @@ print Dumper($config) if $verbose;
 
 if ($args->{command} eq "verify") {
     &verify($args, $config);
+} elsif ($args->{command} eq "newest") {
+    &newest($args, $config);
 } elsif ($args->{command} eq "filters") {
     if (@{$config->{filters}}) {
         print(join("\n", @{$config->{filters}}), "\n");
@@ -86,6 +89,28 @@ sub unparse_bytes {
     else {
         return sprintf("%.1fT", $bytes / 1024 / 1024 / 1024 / 1024);
     }
+}
+
+sub newest {
+    my($args, $config) = @_;
+    my(@cmd) = (&rclone_base_cmd($args, $config), &get_filters($config),
+                'lsf', '--recursive', '--files-only', '--format', 'tp',
+                $config->{source});
+    print("@cmd\n") if ($verbose);
+    open(LSF, "-|", @cmd) or die;
+    my $newest = '';
+    my $newest_stamp = 0;
+    while (<LSF>) {
+        my($Y, $M, $D, $h, $m, $s, $path) = /^(\d+)-0*(\d+)-0*(\d+) 0*(\d+):0*(\d+):0*(\d+);(.*)/ or next;
+        my $stamp = timelocal($s, $m, $h, $D, $M-1, $Y);
+        if ($stamp > $newest_stamp) {
+            $newest = $path;
+            $newest_stamp = $stamp;
+        }
+    }
+    close(LSF) or die;
+    print(scalar localtime($newest_stamp), " (@", $newest_stamp, ") ",
+          $newest, "\n");
 }
 
 sub verify {
@@ -350,7 +375,7 @@ sub make_rclone_cmd {
 }
 
 sub parse_args {
-    my($args, $quiet, $dryrun, $rclone_config, $ls, %verify,
+    my($args, $quiet, $dryrun, $rclone_config, $ls, $newest, %verify,
        $command, $config_file, $copy_links, $filters);
     my $verbose = 0;
 
@@ -361,17 +386,20 @@ sub parse_args {
                "copy-links" => \$copy_links,
                "rclone-config=s" => \$rclone_config,
                "ls" => \$ls,
+               "newest" => \$newest,
                "verify=s" => \%verify,
                "filters" => \$filters) or die $usage;
     $config_file = shift @ARGV or die;
     die "File does not exist: $config_file\n" if (! -f $config_file);
     die "Extra arguments: @ARGV\n" if (@ARGV);
     die "Specify only one of --ls, --verify, --filters\n$usage"
-        if (!!$ls + !!%verify + !!$filters > 1);
+        if (!!$ls + !!$newest + !!%verify + !!$filters > 1);
     if (%verify) {
         $command = "verify";
     } elsif ($ls) {
         $command = "ls";
+    } elsif ($newest) {
+        $command = "newest";
     } elsif ($filters) {
         $command = "filters";
     } else {
