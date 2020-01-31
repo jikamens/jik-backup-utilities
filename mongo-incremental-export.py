@@ -1,9 +1,9 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 from bson import BSON, ObjectId
 import hashlib
 import os
-import cPickle as pickle
+import pickle
 from pymongo import MongoClient
 import sys
 
@@ -26,7 +26,7 @@ def export(db, db_name, collection_name):
     checksums_path = collection_file(db_name, collection_name, 'checksums')
     try:
         checksums = pickle.load(open(checksums_path, 'rb'))
-    except:
+    except Exception:
         checksums = dict()
     new_checksums = dict()
     for doc in collection.find():
