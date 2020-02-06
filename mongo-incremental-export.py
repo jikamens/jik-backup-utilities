@@ -59,7 +59,7 @@ def export(db, db_name, collection_name):
 def main():
     for uri in sys.argv[1:]:
         db_name = uri.rsplit('/', 1)[-1]
-        client = MongoClient(sys.argv[1])
+        client = MongoClient(uri)
         db = client[db_name]
 
         for collection_name in db.collection_names():
