@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import argparse
 from bson import BSON, ObjectId
 from bson.codec_options import CodecOptions
 from bson.son import SON
@@ -7,7 +8,6 @@ import hashlib
 import os
 import pickle
 from pymongo import MongoClient
-import sys
 
 levels = 7
 codec_options = CodecOptions(document_class=SON)
@@ -24,7 +24,7 @@ def collection_file(db_name, collection_name, file_name, levels=0):
     return os.path.join(dir_name, file_name)
 
 
-def export(db, db_name, collection_name):
+def export(db, db_name, collection_name, verbose=0):
     collection = db[collection_name]
     checksums_path = collection_file(db_name, collection_name, 'checksums')
     try:
@@ -42,31 +42,48 @@ def export(db, db_name, collection_name):
         new_checksums[_id] = new_checksum
         if _id in checksums:
             if checksums[_id] == new_checksum:
-                print(u'Skipping {}/{}'.format(collection_name, _id))
+                if verbose > 1:
+                    print(u'Skipping {}/{}'.format(collection_name, _id))
                 continue
-            print(u'Saving {}/{} (modified)'.format(collection_name, _id))
+            if verbose > 0:
+                print(u'Saving {}/{} (modified)'.format(collection_name, _id))
         else:
-            print(u'Saving {}/{} (new)'.format(collection_name, _id))
+            if verbose > 0:
+                print(u'Saving {}/{} (new)'.format(collection_name, _id))
         with open(collection_file(
                 db_name, collection_name, str(_id), -levels), 'wb') as f:
             f.write(bson)
     for _id in checksums:
         if _id not in new_checksums:
-            print(u'Deleting {}/{}'.format(collection_name, _id))
+            if verbose > 0:
+                print(u'Deleting {}/{}'.format(collection_name, _id))
             os.unlink(collection_file(
                 db_name, collection_name, str(_id), -levels))
     with open(checksums_path, 'wb') as f:
         pickle.dump(new_checksums, f)
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description='Export new and modified documents in a database into '
+        'the current directory')
+    parser.add_argument('--verbose', action='count', default=0,
+                        help='Once prints messages for saved and deleted '
+                        'documents, twice also prints for skipped documents')
+    parser.add_argument('db_url', nargs='+', help='mongodb:// URLs of '
+                        'databases to export')
+    return parser.parse_args()
+
+
 def main():
-    for uri in sys.argv[1:]:
+    args = parse_args()
+    for uri in args.db_url:
         db_name = uri.rsplit('/', 1)[-1]
         client = MongoClient(uri, document_class=SON)
         db = client[db_name]
 
         for collection_name in db.collection_names():
-            export(db, db_name, collection_name)
+            export(db, db_name, collection_name, verbose=args.verbose)
 
 
 if __name__ == '__main__':
