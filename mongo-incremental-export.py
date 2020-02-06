@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 
 from bson import BSON, ObjectId
+from bson.codec_options import CodecOptions
+from bson.son import SON
 import hashlib
 import os
 import pickle
@@ -8,6 +10,7 @@ from pymongo import MongoClient
 import sys
 
 levels = 7
+codec_options = CodecOptions(document_class=SON)
 
 
 def collection_file(db_name, collection_name, file_name, levels=0):
@@ -30,7 +33,7 @@ def export(db, db_name, collection_name):
         checksums = dict()
     new_checksums = dict()
     for doc in collection.find():
-        bson = BSON.encode(doc)
+        bson = BSON.encode(doc, codec_options=codec_options)
         md5 = hashlib.md5(bson)
         new_checksum = md5.digest()
         _id = doc.get('_id', None)
@@ -59,7 +62,7 @@ def export(db, db_name, collection_name):
 def main():
     for uri in sys.argv[1:]:
         db_name = uri.rsplit('/', 1)[-1]
-        client = MongoClient(uri)
+        client = MongoClient(uri, document_class=SON)
         db = client[db_name]
 
         for collection_name in db.collection_names():
