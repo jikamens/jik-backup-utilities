@@ -37,10 +37,13 @@ def export(db, db_name, collection_name):
         if not isinstance(_id, ObjectId):
             _id = md5.hexdigest()
         new_checksums[_id] = new_checksum
-        if _id in checksums and checksums[_id] == new_checksum:
-            # print(u'Skipping {}/{}'.format(collection_name, _id))
-            continue
-        print(u'Saving {}/{}'.format(collection_name, _id))
+        if _id in checksums:
+            if checksums[_id] == new_checksum:
+                print(u'Skipping {}/{}'.format(collection_name, _id))
+                continue
+            print(u'Saving {}/{} (modified)'.format(collection_name, _id))
+        else:
+            print(u'Saving {}/{} (new)'.format(collection_name, _id))
         with open(collection_file(
                 db_name, collection_name, str(_id), -levels), 'wb') as f:
             f.write(bson)
