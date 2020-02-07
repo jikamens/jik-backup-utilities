@@ -45,6 +45,7 @@
   - command: grep -q -s bkupuser /home/bkupuser/etc/passwd
     register: user_is_jailed
     ignore_errors: yes
+    changed_when: no
   - command: jk_jailuser -j /home/bkupuser bkupuser
     when: user_is_jailed is failed
   - lineinfile:

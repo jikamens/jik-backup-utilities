@@ -2,6 +2,7 @@
   command: test -f /usr/sbin/jk_init
   register: jailkit_installed
   ignore_errors: yes
+  changed_when: no
 - get_url:
     url: 'http://olivier.sessink.nl/jailkit/jailkit-{{jailkit_version}}.tar.bz2'
     dest: '/tmp/jailkit-{{jailkit_version}}.tar.bz2'
@@ -18,5 +19,6 @@
   command: grep -q -s FIXED /etc/jailkit/jk_init.ini
   register: jailkit_fixed
   ignore_errors: yes
+  changed_when: no
 - script: '{{inventory_dir}}/jailkit/tasks/jk_init_fixer.py'
   when: jailkit_fixed is failed
