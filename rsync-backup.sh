@@ -2,15 +2,26 @@
 
 PATH=/usr/local/bin:$PATH
 
-# Set "V" to "true" for verbose output.
-V=false
+verbose() {
+    cutoff=1
+    while [ "$1" = "verbose" ]; do
+        shift
+        ((++cutoff))
+        done
+    if ((V < cutoff)); then
+        return
+    fi
+    echo $(date) "$@"
+}
+
+V=0
 NFLAG=
 
 while [ "$*" ]; do
     case "$1" in
 	-v|--verbose)
 	    shift
-	    V=true
+	    ((++V))
 	    ;;
 	-n|--dry-run|--dryrun)
 	    shift
@@ -55,7 +66,7 @@ mkdir $D
 
 cp /dev/null $D/filter
 
-$V && echo "Creating filter"
+verbose "Creating filter"
 
 cat >> $D/filter <<EOF
 - .spamtrain.lock
@@ -125,10 +136,13 @@ cat >> $D/filter <<EOF
 - /var/www/blog.example.com/wp-content/themes/swatch/cache/*
 EOF
 
-unchanged-rpm-files.pl --rsync-filter --nomd5 $($V && echo "--verbose") \
-    >> $D/filter
+if ((V > 1)); then
+    VFLAG=--verbose
+fi
 
-$V && echo "Adding core files to filter"
+unchanged-rpm-files.pl --rsync-filter --nomd5 $VFLAG >> $D/filter
+
+verbose echo "Adding core files to filter"
 
 locate '*/core' '*/core.[0-9]*' |
 while read file; do
@@ -139,15 +153,14 @@ while read file; do
     echo "- $file" >> $D/filter
 done
 
-if $V; then
-    echo "Running backup"
-    VFLAG=--verbose
-fi
+verbose "Running backup"
 
 rsync --archive --delete --delete-excluded --compress $VFLAG $NFLAG \
     --one-file-system --filter ". $D/filter" \
     / $REMOTE_USER@$REMOTE_HOST:$REMOTE_DIR/
 
-$V && echo "Cleaning up"
+verbose "Cleaning up"
 
 rm -rf $D
+
+verbose "Done"
