@@ -1,0 +1,177 @@
+#!/usr/bin/env python3
+
+# Restore backup files that shouldn't have been deleted.
+
+
+import argparse
+from b2api import B2API
+import datetime
+from itertools import chain
+import logbook
+import os
+import psutil
+from rcloneutils import (
+    get_encrypted_remote,
+    get_plain_remote,
+    get_rclone_config,
+    RcloneDecoder,
+)
+import resource
+import sys
+import threading
+
+whoami = os.path.basename(sys.argv[0])
+one_day = 60 * 60 * 24
+logger = None
+
+worker_semaphore = threading.Semaphore(0)
+worker_queue = []
+worker_queue_semaphore = threading.Semaphore(0)
+worker_queue_lock = threading.RLock()
+
+
+def do_one_file(args, encoded_file_name, decoded_file_name, file_id,
+                account_id, api_key):
+    if not worker_semaphore.acquire(False):
+        # Don't exceed 90% of available file descriptors
+        open_fds = psutil.Process().num_fds()
+        max_fds = resource.getrlimit(resource.RLIMIT_NOFILE)[0]
+        if open_fds / max_fds >= .9:
+            logger.debug('Waiting for worker to become available')
+        else:
+            logger.debug('Starting new thread')
+            t = threading.Thread(target=restore_worker,
+                                 args=(args, account_id, api_key))
+            t.start()
+    else:
+        worker_semaphore.release()
+        logger.debug('Using existing thread')
+    worker_queue_lock.acquire()
+    worker_queue.append((decoded_file_name, encoded_file_name, file_id))
+    worker_queue_lock.release()
+    worker_queue_semaphore.release()
+
+
+def restore_worker(args, account_id, api_key):
+    thread_id = threading.current_thread()
+    if not args.dryrun:
+        b2 = B2API(account_id, api_key, logger=logger)
+    worker_semaphore.release()
+    logger.debug('[{}] Thread active', thread_id)
+    while worker_queue_semaphore.acquire():
+        logger.debug('[{}] Thread working', thread_id)
+        worker_semaphore.acquire()
+        worker_queue_lock.acquire()
+        decoded_path, path, file_id = worker_queue.pop(0)
+        worker_queue_lock.release()
+        if decoded_path is None:
+            logger.debug('[{}] Thread exiting', thread_id)
+            return
+        try:
+            if args.dryrun:
+                action = 'Would restore'
+            else:
+                b2.delete_file_version(path, file_id)
+                action = 'Restored'
+        except:  # NOQA
+            logger.exception('Exception deleting version {} of {} '
+                             '(encrypted: {})', file_id, decoded_path, path)
+            return
+        else:
+            if args.verbose:
+                print('{} {}'.format(action, decoded_path))
+        finally:
+            worker_semaphore.release()
+        logger.debug('[{}] Thread waiting', thread_id)
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description='Recover deleted '
+                                     'rclone-encrypted B2 backup files')
+    parser.add_argument('--debug', action='store_true', default=False,
+                        help='Enable debug logging')
+    parser.add_argument('--verbose', action='store_true', default=False,
+                        help='Enable verbose output')
+    parser.add_argument('--dryrun', action='store_true', default=False,
+                        help='Say what would be done without doing it')
+    parser.add_argument('--local-directory', action='store', required=True,
+                        help='Local directory containing actual files')
+    parser.add_argument('--backup-directory', action='store', required=True,
+                        help='Directory in backup corresponding to local '
+                        'directory')
+    return parser.parse_args()
+
+
+def main():
+    global logger
+
+    args = parse_args()
+    logger = logbook.Logger(whoami)
+    logbook.StderrHandler(level='DEBUG' if args.debug else 'INFO').\
+        push_application()
+
+    if args.verbose:
+        print('Starting at {}'.format(datetime.datetime.now()))
+
+    config = get_rclone_config()
+    rclone_remote = get_encrypted_remote(config)
+    b2, bucket_id = get_plain_remote(config, rclone_remote, logger=logger)
+
+    logger.debug('Using bucket ID {}', bucket_id)
+
+    try:
+        main_loop(args, rclone_remote, b2, bucket_id)
+    finally:
+        for t in threading.enumerate():
+            logger.debug('Telling thread to exit')
+            worker_queue_lock.acquire()
+            worker_queue.append((None, None, None))
+            worker_queue_lock.release()
+            worker_queue_semaphore.release()
+        for t in threading.enumerate():
+            try:
+                t.join()
+            except RuntimeError:  # current thread
+                pass
+        if args.verbose:
+            print('Finished at {}'.format(datetime.datetime.now()))
+
+
+def main_loop(args, rclone_remote, b2, bucket_id):
+    account_id = b2.account_id
+    api_key = b2.account_key
+    last_file_name = None
+    queue = []
+
+    decoder = RcloneDecoder(rclone_remote, mode='decode')
+    encoder = RcloneDecoder(rclone_remote, mode='encode')
+
+    encoder.add(args.backup_directory)
+    encoded_backup_directory = encoder.get(args.backup_directory)
+
+    for file in chain(b2.list_file_versions(
+            bucket_id, prefix=encoded_backup_directory), (None,)):
+        if file:
+            file_name = file['fileName']
+            if file_name == last_file_name:
+                continue
+            last_file_name == file_name
+            if file['action'] != 'hide':
+                continue
+            queue.append((file_name, file['fileId']))
+            decoder.add(file_name)
+        if not file or decoder.full:
+            for file_name, fileId in queue:
+                decoded_file_name = decoder.get(file_name)
+                local_file_name = os.path.join(
+                    args.local_directory,
+                    decoded_file_name[len(args.backup_directory) + 1:])
+                if not os.path.exists(local_file_name):
+                    continue
+                do_one_file(args, file_name, decoded_file_name,
+                            fileId, account_id, api_key)
+            queue = []
+
+
+if __name__ == '__main__':
+    main()

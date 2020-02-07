@@ -495,6 +495,20 @@ encrypted, but I haven't bothered to do this since my backups are
 encrypted. Perhaps I'll get around to it eventually, or I'll happily
 accept a pull request if someone else does.
 
+### `backblaze-recover-backup`: Recover from backup catastrophe
+
+I threw together this script when one of my backups got wiped out by
+`rclone-backup` because I was backing up a mounted filesystem and the
+backup ran when the filesystem wasn't mounted, causing `rclone-backup`
+to think that every file had been deleted and therefore deleting them
+all in B2 as well. The only purpose of this script is to go through
+all the files in the local directory and undelete any of them that
+exist in deleted form in the backup directory.
+
+As above, this script is designed to work with B2 backups with
+encrypted file paths but could easily be adjusted to work for backups
+with plaintext file paths.
+
 ## A note about offline backups
 
 Off-site backups are not the same as _offline_ backups.
