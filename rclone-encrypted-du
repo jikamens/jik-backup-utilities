@@ -1,0 +1,170 @@
+#!/usr/bin/env python3
+
+import argparse
+from b2api import B2API
+from collections import defaultdict
+from configparser import ConfigParser
+import datetime
+import os
+from rcloneutils import RcloneDecoder
+from subprocess import Popen, PIPE
+import sys
+
+whoami = os.path.basename(sys.argv[0])
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description='tar-du-ls.pl on '
+                                     'rclone-encrypted B2 remote')
+    parser.add_argument('--ls', action='store_true', help='Just list sizes '
+                        'and file paths rather than running them through '
+                        'tar-ls-du.pl')
+    parser.add_argument('--progress', action='store_true', help='Show '
+                        'progress (# of file versions processed) to stderr')
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument('--all-output', action='store', help='File in which '
+                       'to inventory deleted and undeleted file versions '
+                       '(default stdout)')
+    group.add_argument('--no-all-output', dest='all_output',
+                       action='store_false', help="Don't inventory deleted "
+                       "and undeleted file versions together")
+    parser.add_argument('--deleted-output', action='store', help='File in '
+                        'which to inventory deleted file versions separately')
+    parser.add_argument('--undeleted-output', action='store', help='File in '
+                        'which to inventory undeleted file versions '
+                        'separately')
+    parser.add_argument('--start-at', action='store',
+                        help='File path to start with')
+    parser.add_argument('--stop-after', action='store',
+                        help='File path to stop after')
+    parser.add_argument('encrypted_remote',
+                        help='Rclone B2 encrypted remote name')
+    return parser.parse_args()
+
+
+def main():
+    args = parse_args()
+
+    rclone_config_file = os.getenv('HOME') + '/.rclone.conf'
+    config_parser = ConfigParser()
+    config_parser.read(rclone_config_file)
+    plain_remote = config_parser.get(args.encrypted_remote, 'remote')
+    if not plain_remote.startswith('B2:'):
+        sys.exit('Expected remote starting with "B2:", got {}'.format(
+            plain_remote))
+    bucket_name = plain_remote[3:]
+    account_id = config_parser.get('B2', 'account')
+    api_key = config_parser.get('B2', 'key')
+
+    if args.ls:
+        du_cmd = ('cat',)
+    else:
+        du_cmd = ('tar-ls-du.pl', '--rclonels')
+
+    processes = {}
+
+    if args.all_output:
+        with open(args.all_output, 'w') as f:
+            processes['all'] = Popen(du_cmd, stdin=PIPE, stdout=f)
+    elif args.all_output is not False:
+        processes['all'] = Popen(du_cmd, stdin=PIPE)
+
+    if args.deleted_output:
+        with open(args.deleted_output, 'w') as f:
+            processes['deleted'] = Popen(du_cmd, stdin=PIPE, stdout=f)
+
+    if args.undeleted_output:
+        with open(args.undeleted_output, 'w') as f:
+            processes['undeleted'] = Popen(du_cmd, stdin=PIPE, stdout=f)
+
+    b2 = B2API(account_id, api_key)
+
+    bucket_list = b2.list_buckets(bucket_name=bucket_name)
+    bucket_id = bucket_list[0]['bucketId']
+
+    decoder = RcloneDecoder(args.encrypted_remote,
+                            config_file=rclone_config_file)
+
+    file_names = []
+    file_versions = defaultdict(list)
+    counter = 0
+    for file in b2.list_file_versions(bucket_id):
+        counter += 1
+        if args.progress and not (counter % 1000):
+            sys.stderr.write('{}\r'.format(counter))
+        file_name = file['fileName']
+        if not file_names or file_names[-1] != file_name:
+            if not maybe_process_files(args, decoder, file_names,
+                                       file_versions, processes):
+                break
+            file_names.append(file_name)
+            decoder.add(file_name)
+        file_versions[file_name].append(file)
+
+    maybe_process_files(args, decoder, file_names, file_versions, processes,
+                        force=True)
+
+    if args.progress:
+        sys.stderr.write('{}\n'.format(counter))
+
+    for process in processes.values():
+        process.stdin.close()
+
+    for process in processes.values():
+        process.wait()
+        if process.returncode:
+            raise Exception('{} process exited with non-zero status'.format(
+                du_cmd))
+
+
+def maybe_process_files(args, decoder, names, versions, processes,
+                        force=False):
+    if not (force or decoder.full):
+        return True
+    finished = False
+    for name in names:
+        decoded_name = decoder.get(name)
+        if args.start_at:
+            if decoded_name != args.start_at:
+                continue
+            args.start_at = None
+        file_versions = versions[name]
+        deleted = False
+        for version in file_versions:
+            action = version['action']
+            if action == 'upload':
+                size = version['contentLength']
+                if deleted:
+                    timestamp = int(version['uploadTimestamp'] / 1000)
+                    dt = datetime.datetime.utcfromtimestamp(timestamp)
+                    suffix = dt.strftime('-v%F-%H%M%S-000')
+                else:
+                    suffix = ''
+                msg = '{} {}{}\n'.format(size, decoded_name, suffix)
+                try:
+                    processes['all'].stdin.write(msg.encode())
+                except KeyError:
+                    pass
+                try:
+                    if deleted:
+                        processes['deleted'].stdin.write(msg.encode())
+                except KeyError:
+                    pass
+                try:
+                    if not deleted:
+                        processes['undeleted'].stdin.write(msg.encode())
+                except KeyError:
+                    pass
+            if action in ('upload', 'hide'):
+                deleted = True
+        if args.stop_after:
+            if decoded_name == args.stop_after:
+                finished = True
+                break
+    del names[:]
+    versions.clear()
+    return not finished
+
+
+if __name__ == '__main__':
+    main()

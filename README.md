@@ -523,6 +523,22 @@ as well.
 
 As above, this is designed to work with encrypted file paths etc.
 
+### `rclone-encrypted-du`: Calculate space usage in encrypted backup
+
+This feeds the contents of an encrypted remote through the
+`tar-ls-du.pl` script described above. You can generate any of three
+different output files: a file showing usage for all files both
+deleted and undeleted files, one showing just undeleted, and one
+showing just deleted. This is useful because you mway want to look at
+just undeleted files to determine if you're backing up the right
+things, or just at deleted files to determine if you're enforcing the
+right expiration policies with `backblaze-prune-backups`.
+
+You can use `rclone ncdu` on an encrypted remote, so that's useful if
+you're just interested in looking at undeleted files, but it won't
+work with deleted files in a B2 bucket backing an encrypted remote,
+so for that you ueed something like this script.
+
 ## A note about offline backups
 
 Off-site backups are not the same as _offline_ backups.
