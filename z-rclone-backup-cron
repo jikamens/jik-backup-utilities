@@ -6,9 +6,12 @@ fi
 
 LF=/var/run/rclone-backups.lock
 BD=/etc/rclone-backups
+SD=/var/lib/rclone-backups
 BACKUPS=$BD/*.conf
 # Uncomment this to print commands instead of executing them.
 #DRYRUN=echo
+
+mkdir -p $SD
 
 # We get 1GB of downloads free per day. Divide that by the number of
 # rclone configurations we are doing and allocate that much to each
@@ -28,14 +31,28 @@ filter_rclone_output() {
 }
     
 backup() {
+    local cf tf sf stamp age
     set -e
     set -o pipefail
     cf="$1"; shift
     tf="${cf##*/}"
-    $DRYRUN rclone-backup --quiet $cf 2>&1 | filter_rclone_output |
+    sf="$SD/${tf%.conf}.stamp"
+    if [ -f $sf ]; then
+        stamp=$(stat -c %Y $sf)
+    fi
+    $DRYRUN rclone-backup --quiet $cf 2> >(filter_rclone_output) |
         sed -e "s/^/$tf:/"
-    $DRYRUN rclone-backup --verify "data=<$verify_each" --verify "age=2d" $cf \
-        2>&1 | filter_rclone_output | sed -e "s/^/$tf:/"
+    if [ -n "$stamp" ]; then
+        age=$(($(date +%s) - stamp))s
+    else
+        age=1d
+    fi
+    $DRYRUN rclone-backup --verify "data=<$verify_each" \
+        --verify "age=$age" $cf 2> >(filter_rclone_output) | \
+        sed -e "s/^/$tf:/"
+    stamp=$(rclone-backup --newest $cf 2> >(filter_rclone_output) |
+            sed -n -e 's/.*(@\([0-9]*\)).*/\1/p')
+    $DRYRUN touch --date "@$stamp" $sf
 }
 
 echo $$ > $LF.$$
