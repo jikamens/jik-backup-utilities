@@ -539,6 +539,19 @@ you're just interested in looking at undeleted files, but it won't
 work with deleted files in a B2 bucket backing an encrypted remote,
 so for that you ueed something like this script.
 
+### `rclone-encrypted-restore`: Restore historical backups
+
+This lets you specify an encrypted remote, path within it, and target
+directory, and restores either all historical revisions of files
+within that path or the revision that was extant at a particular
+specified time.
+
+This is obviously limited to revisions that have been preserved, so if
+you use `backblaze-prune-backups` then you may not be able to restore
+exactly what the files looked like at a specific time.
+
+As above, this is designed to work with encrypted file paths etc.
+
 ## A note about offline backups
 
 Off-site backups are not the same as _offline_ backups.

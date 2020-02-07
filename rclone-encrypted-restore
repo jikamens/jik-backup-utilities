@@ -1,0 +1,171 @@
+#!/usr/bin/env python3
+
+import argparse
+import datetime
+from dateutil.parser import parse as dateparse
+import os
+from rcloneutils import (
+    RcloneDecoder,
+    files_versions,
+    get_plain_remote,
+    get_rclone_config,
+)
+import subprocess
+from tempfile import TemporaryDirectory
+
+rclone_conf_file = os.getenv('HOME') + '/.rclone.conf'
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description='Restore an encrypted B2 rclone backup as of a '
+        'particular time or all historical versions')
+    parser.add_argument('--debug', action='store_true')
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument('--all', action='store_true', help='Restore all '
+                       'historical versions')
+    group.add_argument('--as-of', action='store', type=dateparse,
+                       help='Restore as of the specified timestamp')
+    parser.add_argument('--temporary-directory', '--tmp-dir', action='store',
+                        default='/tmp', help='Where to store intermediate '
+                        'files during restore (default /tmp)')
+    parser.add_argument('source', metavar='remote:path', action='store',
+                        help='Path to restore from specified crypt remote '
+                        'backed by B2 remote')
+    parser.add_argument('target', action='store',
+                        help='Local target directory')
+    return parser.parse_args()
+
+
+class TemporaryConfig(object):
+    def __init__(self, encrypted_remote, tmpdir):
+        self.tmpdir = tmpdir
+        self.files_dir = os.path.join(self.tmpdir, 'files')
+        self.conf_file = os.path.join(self.tmpdir, 'rclone.conf')
+        config = get_rclone_config(rclone_conf_file)
+        config['staging'] = config[encrypted_remote]
+        config['staging']['remote'] = self.files_dir
+        with open(self.conf_file, 'w') as configfile:
+            config.write(configfile)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, type, value, traceback):
+        os.unlink(self.conf_file)
+
+
+class Mover(object):
+    def __init__(self, tc, target, debug=False):
+        self.tc = tc
+        self.target = target
+        self.debug = debug
+        self.counter = 0
+        self.periodicity = 10
+
+    def increment(self):
+        self.counter += 1
+        if self.counter >= self.periodicity:
+            self.move()
+
+    def move(self):
+        if not self.counter:
+            return
+        if self.debug:
+            print('Decrypting files from {} into {}'.format(
+                self.tc.files_dir, self.target))
+        subprocess.check_call(('rclone', '--config', self.tc.conf_file,
+                               'move', 'staging:', self.target))
+        self.counter = 0
+
+
+def handle_path(encrypted_path, plain_path, args, versions):
+    if args.all:
+        handle_all(encrypted_path, plain_path, args, versions)
+    else:
+        handle_as_of(encrypted_path, plain_path, args, versions)
+
+
+def handle_all(encrypted_path, plain_path, args, versions):
+    existed = False
+    for v in versions:
+        this_path = plain_path + '-v' + \
+            datetime.datetime.\
+            fromtimestamp(v['uploadTimestamp'] / 1000).isoformat()
+        if args.debug:
+            print('Handling {}'.format(this_path))
+        if v['action'] == 'hide':
+            if not existed:
+                if args.debug:
+                    print('{} already hidden, continuing'.format(
+                        this_path))
+                continue
+            if args.debug:
+                print('Linking {} to /dev/null'.format(this_path))
+            existed = False
+            full_target = os.path.join(args.target, this_path)
+            os.makedirs(os.path.dirname(full_target), exist_ok=True)
+            os.symlink('/dev/null', full_target)
+        else:
+            existed = True
+            encrypted_target = os.path.join(
+                args.tc.files_dir, args.encoder.add_get(this_path))
+            if args.debug:
+                print('Downloading encrypted {} as {}'.format(
+                    this_path, encrypted_target))
+            os.makedirs(os.path.dirname(encrypted_target), exist_ok=True)
+            content = args.b2.download_file_by_id(v['fileId'])
+            with open(encrypted_target, 'wb') as f:
+                f.write(content)
+            args.mover.increment()
+
+
+def handle_as_of(encrypted_path, plain_path, args, versions):
+    for v in versions:
+        version_stamp = datetime.datetime.fromtimestamp(
+            v['uploadTimestamp'] / 1000)
+        if version_stamp > args.as_of:
+            if args.debug:
+                print('Skipping newer version ({}) of {}'.format(
+                    version_stamp, plain_path))
+            continue
+        if v['action'] == 'hide':
+            if args.debug:
+                print('{} did not exist at {}'.format(plain_path, args.as_of))
+                return
+        encrypted_target = os.path.join(args.tc.files_dir, encrypted_path)
+        if args.debug:
+            print('Downloading encrypted {} ({}) as {}'.format(
+                plain_path, version_stamp, encrypted_target))
+        os.makedirs(os.path.dirname(encrypted_target), exist_ok=True)
+        content = args.b2.download_file_by_id(v['fileId'])
+        with open(encrypted_target, 'wb') as f:
+            f.write(content)
+        args.mover.increment()
+        return
+
+
+def main():
+    args = parse_args()
+    encrypted_remote, plain_source_path = args.source.split(':')
+    rclone_config = get_rclone_config(rclone_conf_file)
+    b2, bucket_id = get_plain_remote(rclone_config, encrypted_remote)
+    decoder = RcloneDecoder(encrypted_remote)
+    encoder = RcloneDecoder(encrypted_remote, mode='encode')
+    encrypted_source_path = encoder.add_get(plain_source_path)
+
+    with TemporaryDirectory(dir=args.temporary_directory) as td, \
+            TemporaryConfig(encrypted_remote, td) as tc:
+        args.b2 = b2
+        args.encoder = encoder
+        args.tc = tc
+        args.mover = Mover(tc, args.target, args.debug)
+        for versions in files_versions(b2, bucket_id, encrypted_source_path):
+            decoder.get_async(
+                versions[0]['fileName'], handle_path, args, versions)
+        decoder.execute()
+        args.mover.move()
+
+
+if __name__ == '__main__':
+    main()
