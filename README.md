@@ -227,7 +227,7 @@ straightforward reverse of this export process, though I haven't
 bothered to write that script yet since I haven't actually needed to
 do such a restore. Some notes about this:
 
-* The script stores a "checkums" file in each collection subdirectory
+* The script stores a "checksums" file in each collection subdirectory
   of the database directory. These files are used to make the script
   itself run faster, and they should be excluded from backups since
   they're not needed for restores and are not particularly
