@@ -119,8 +119,10 @@ solutions offered by [Backblaze][backblaze].
    backups are of directories on my NAS which are mounted on my Linux
    desktop via either CIFS or NFS.
 
-8. My B2 bucket is configured to preserve deleted files for a year
-   before purging them automatically.
+8. I used to hae my B2 bucket configured to preserve deleted files for
+   a year before purging them automatically, but now I use
+   `backblaze-prune-backups` as described below to implement flexible
+   backup expiration rules.
 
 Some of the code I'm providing here should be usable out-of-the-box
 with essentially no modifications. However, some of it is intended
@@ -464,6 +466,34 @@ Note that all of these backup sources are stable, i.e., none of them
 is being actively modified while the nightly rclone backups are
 running. This is important to avoid false errors during the backup
 verification step.
+
+## Additional scripts for working with backups
+
+Also included here are a number of additional scripts that help with
+administering, restoring, and cleaning up backups. Some of these
+scripts import two Python modules, [`b2api.py`](b2api.py) and
+[`rcloneutils.py`](rcloneutils.py), which you therefore need to put
+into a directory in Python's search path where the scripts can find
+them.
+
+### `backblaze-prune-backups`: Flexible backup expiration
+
+This script rummages through the encrypted data in my B2 backup
+bucket, decrypts the paths of the files backed up in the bucket,
+applies path-matching rules to determine the backup retention policy
+for every file, and applies that backup retention policy, pruning
+deleted files that the policy says should no longer be saved. See the
+usage message for the script and the comment in the `policies` section
+near the top which explains how retention policies are defined.
+
+Note that a lot of the logic in this script is there to cope with the
+fact that my backups are encrypted and therefore paths in the backups
+have to be decrypted in order to apply path-matching rules to them.
+The script could be modified to bypass the path decryption logic and
+just apply the expiration logic for backups in which the paths are not
+encrypted, but I haven't bothered to do this since my backups are
+encrypted. Perhaps I'll get around to it eventually, or I'll happily
+accept a pull request if someone else does.
 
 ## A note about offline backups
 
