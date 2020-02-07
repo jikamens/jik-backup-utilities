@@ -509,6 +509,20 @@ As above, this script is designed to work with B2 backups with
 encrypted file paths but could easily be adjusted to work for backups
 with plaintext file paths.
 
+### `rclone-encrypted-cleanup`: Permanently purge files from backup
+
+This script can be used to purge specific files, or all files
+underneath a specific directory, from a remote backup. It's useful if
+you've discovered that something huge was backed up that shouldn't
+have been and you don't want to keep paying to store the deleted file
+until `backblaze-prune-backups` gets around to pruning it.
+
+By default the script only cleans up the deleted versions of files,
+but you can specify `--purge` to tell it to purge undeleted versions
+as well.
+
+As above, this is designed to work with encrypted file paths etc.
+
 ## A note about offline backups
 
 Off-site backups are not the same as _offline_ backups.

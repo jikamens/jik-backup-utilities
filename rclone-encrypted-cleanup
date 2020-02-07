@@ -1,0 +1,76 @@
+#!/usr/bin/env python3
+
+import argparse
+import os
+from rcloneutils import (
+    files_versions,
+    get_plain_remote,
+    get_rclone_config,
+    RcloneDecoder,
+)
+import sys
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description='Clean up deleted versions '
+                                     'of specific files in encrypted rclone '
+                                     'repository',
+                                     epilog='Specify "--verbose" multiple '
+                                     'times for increased verbosity')
+    parser.add_argument('--purge', action='store_true', help='Also get rid '
+                        'of the undeleted version of the file')
+    parser.add_argument('--verbose', action='count', default=0)
+    parser.add_argument('--dryrun', action='store_true')
+    parser.add_argument('encrypted_remote', help='Rclone B2 encrypted remote '
+                        'name')
+    parser.add_argument('file_path', nargs='+', help='File path to clean up')
+    return parser.parse_args()
+
+
+def main():
+    args = parse_args()
+    rclone_config_file = os.getenv('HOME') + '/.rclone.conf'
+    rclone_config = get_rclone_config(rclone_config_file)
+    b2, bucket_id = get_plain_remote(rclone_config, args.encrypted_remote)
+    encoder = RcloneDecoder(args.encrypted_remote, mode='encode')
+    decoder = RcloneDecoder(args.encrypted_remote, mode='decode')
+
+    for unencrypted_file_path in args.file_path:
+        encoder.add(unencrypted_file_path)
+    encoder.execute()
+
+    matched_all = True
+    for unencrypted_file_path in args.file_path:
+        matched = False
+        encrypted_file_path = encoder.get(unencrypted_file_path)
+        for versions in files_versions(b2, bucket_id, encrypted_file_path):
+            decoder.add(versions[0]['fileName'])
+            decoder.execute()
+            fileName = decoder.get(versions[0]['fileName'])
+            # Skip current version unless we're purging.
+            if not args.purge and versions[0]['action'] == 'upload':
+                versions.pop(0)
+            # Delete oldest first so that we won't re-expose a hidden file if
+            # we crash.
+            versions = list(reversed(versions))
+            if versions:
+                matched = True
+                if args.verbose > 0:
+                    print('Deleting {} versions of {}'.format(
+                        len(versions), fileName))
+            for v in versions:
+                if args.verbose > 1:
+                    print('Deleting version {} of {}'.format(
+                        v['fileId'], v['fileName']))
+                if not args.dryrun:
+                    b2.delete_file_version(v['fileName'], v['fileId'])
+        if not matched:
+            sys.stderr.write('No match for {}\n'.format(unencrypted_file_path))
+            matched_all = False
+
+    if not matched_all:
+        sys.exit(1)
+
+
+if __name__ == '__main__':
+    main()
