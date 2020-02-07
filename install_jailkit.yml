@@ -1,0 +1,22 @@
+- name: check if jailkit is installed
+  command: test -f /usr/sbin/jk_init
+  register: jailkit_installed
+  ignore_errors: yes
+- get_url:
+    url: 'http://olivier.sessink.nl/jailkit/jailkit-{{jailkit_version}}.tar.bz2'
+    dest: '/tmp/jailkit-{{jailkit_version}}.tar.bz2'
+  when: jailkit_installed is failed
+- command: 'tar -C /tmp -xjf /tmp/jailkit-{{jailkit_version}}.tar.bz2'
+  when: jailkit_installed is failed
+- command: ./configure chdir='/tmp/jailkit-{{jailkit_version}}'
+  when: jailkit_installed is failed
+- command: make chdir='/tmp/jailkit-{{jailkit_version}}'
+  when: jailkit_installed is failed
+- command: make install chdir='/tmp/jailkit-{{jailkit_version}}'
+  when: jailkit_installed is failed
+- name: check if jailkit is fixed
+  command: grep -q -s FIXED /etc/jailkit/jk_init.ini
+  register: jailkit_fixed
+  ignore_errors: yes
+- script: '{{inventory_dir}}/jailkit/tasks/jk_init_fixer.py'
+  when: jailkit_fixed is failed

@@ -1,0 +1,56 @@
+- hosts: bkuptarget.example.com
+  tasks:
+  - include_tasks: '{{inventory_dir}}/jailkit/tasks/install_jailkit.yml'
+
+- hosts: bkupsource.example.com
+  tasks:
+  - command: ssh-keygen -f /root/.ssh/id_backup -N ''
+    args:
+      creates: /root/.ssh/id_backup
+  - fetch:
+      src: /root/.ssh/id_backup.pub
+      dest: /tmp
+
+- hosts: bkuptarget.example.com
+  tasks:
+  - command: jk_init -j /home/bkupuser rsync jk_lsh
+    args:
+      creates: /home/bkupuser/usr/bin/rsync
+  - file:
+      path: /home/bkupuser/home
+      state: directory
+  - user:
+      user: bkupuser
+      home: /home/bkupuser/./home/bkupuser
+      shell: /usr/sbin/jk_chrootsh
+  - file:
+      path: /home/bkupuser/home/bkupuser/.ssh
+      state: directory
+  - file:
+      path: /mnt/backup/bkupsource
+      owner: bkupuser
+      state: directory
+  - file:
+      path: /home/bkupuser/home/bkupuser/backup
+      owner: bkupuser
+      state: directory
+  - copy:
+      src: /tmp/bkupsource.example.com/root/.ssh/id_backup.pub
+      dest: /home/bkupuser/home/bkupuser/.ssh/authorized_keys
+  - replace:
+      dest: /home/bkupuser/etc/jailkit/jk_lsh.ini
+      regexp: '## example for a user.*'
+      replace: '[DEFAULT]\nexecutables=/usr/bin/rsync\npaths=/usr/bin'
+    register: lsh_ini
+  - command: grep -q -s bkupuser /home/bkupuser/etc/passwd
+    register: user_is_jailed
+    ignore_errors: yes
+  - command: jk_jailuser -j /home/bkupuser bkupuser
+    when: user_is_jailed is failed
+  - lineinfile:
+      dest: /etc/fstab
+      line: '/mnt/backup/bkupsource /home/bkupuser/home/bkupuser/backup none bind'
+    register: fstabchanged
+  - command: mount /home/bkupuser/home/bkupuser/backup
+    when: fstabchanged.changed
+
