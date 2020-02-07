@@ -79,6 +79,7 @@ cat >> $D/filter <<EOF
 - /etc/udev/hwdb.bin
 - /home/jane/.tmda/logs/*
 - /home/jane/.tmda/pending/*
+- /home/*/.cache
 - /home/*/Mail/bogospam*
 - /home/*/Mail/notspam*
 - /home/john/.cpan
@@ -93,6 +94,7 @@ cat >> $D/filter <<EOF
 - /home/ngp/Mail/from*
 - /home/ngp/Mail/msgid.cache*
 - /home/rhj/stmp/admin/tmp.rhj
+- /root/.cache
 - /root/.cpan
 - /root/rpmbuild/BUILD
 - /root/rpmbuild/BUILDROOT
