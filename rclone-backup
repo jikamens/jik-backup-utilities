@@ -103,7 +103,8 @@ sub newest {
     while (<LSF>) {
         my($Y, $M, $D, $h, $m, $s, $path) = /^(\d+)-0*(\d+)-0*(\d+) 0*(\d+):0*(\d+):0*(\d+);(.*)/ or next;
         my $stamp = timelocal($s, $m, $h, $D, $M-1, $Y);
-        if ($stamp > $newest_stamp) {
+        # Don't allow files with timestamps in the future to screw things up.
+        if ($newest_stamp < $stamp and $stamp < time()) {
             $newest = $path;
             $newest_stamp = $stamp;
         }
@@ -373,7 +374,8 @@ sub archive_special_files {
         my($Y, $M, $D, $h, $m, $s) =
             /(\d+)-0*(\d+)-0*(\d+) 0*(\d+):0*(\d+):0*(\d+)/ or next;
         my($stamp) = timelocal($s, $m, $h, $D, $M-1, $Y);
-        if ($stamp > $newest) {
+        # Don't allow files with timestamps in the future to screw things up.
+        if ($newest < $stamp and $stamp < time()) {
             $newest = $stamp;
         }
     }

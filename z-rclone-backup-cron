@@ -1,5 +1,7 @@
 #!/bin/bash
 
+set -o pipefail
+(
 if [ -f /etc/default/rclone-backups ]; then
     . /etc/default/rclone-backups
 fi
@@ -90,3 +92,6 @@ if $ok; then
 else
     exit 1
 fi
+
+# In case the log file is so large that postfix refuses to email it
+) 2>&1 | tee /tmp/rclone-backup-cron.log

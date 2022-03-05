@@ -7,7 +7,8 @@ import sys
 
 
 class RcloneDecoder(object):
-    def __init__(self, remote, config_file=None, mode='decode'):
+    def __init__(self, remote, config_file=None, mode='decode',
+                 queue_size=1000):
         self.config_file = config_file
         self.remote = remote
         if mode not in ('decode', 'encode'):
@@ -15,6 +16,7 @@ class RcloneDecoder(object):
                 'Invalid mode "{}", should be "decode" or "encode"'.format(
                     mode))
         self.mode = mode
+        self.queue_size = queue_size
         self.queue = {}
         self.queue_length = 0
         self.async_queue = []
@@ -22,14 +24,18 @@ class RcloneDecoder(object):
         self.arg_limit = 131072
 
     def add(self, path):
+        executed = False
         for name in path.split('/'):
             if name and name not in self.mappings:
                 if self.queue_length + len(name) > self.arg_limit:
                     self.execute()
+                    executed = True
                 self.queue[name] = 1
                 self.queue_length += len(name) + 1
         if self.full:
             self.execute()
+            executed = True
+        return executed
 
     def get(self, path, execute=True):
         if execute:
@@ -46,7 +52,7 @@ class RcloneDecoder(object):
 
     @property
     def full(self):
-        return len(self.queue) >= 1000
+        return len(self.queue) >= self.queue_size
 
     def execute(self):
         if self.queue:

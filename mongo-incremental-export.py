@@ -82,7 +82,7 @@ def main():
         client = MongoClient(uri, document_class=SON)
         db = client[db_name]
 
-        for collection_name in db.collection_names():
+        for collection_name in db.list_collection_names():
             export(db, db_name, collection_name, verbose=args.verbose)
 
 
