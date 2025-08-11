@@ -1,0 +1,90 @@
+#!/bin/bash -e
+
+verbose=false
+full=false
+
+while [ -n "$1" ]; do
+    case "$1" in
+        "--verbose") verbose=true; shift ;;
+        "--full") full=true; shift ;;
+        *) echo "Unrecognized argument \"$1\"" 1>&2; exit 1 ;;
+    esac
+done
+
+bd={{mysql_backup_directory}}
+# Example: If max_incremental is set to 45 and max_full is set to 2, then
+# once things reach a steady state you will have a minimum of the last 47 days
+# and a maximum of the last 92 days of backups at any given time.
+# how many incremental backups before doing a full backup
+max_incremental=45
+# how many full backups to keep
+max_full=2
+# GRANT RELOAD, PROCESS, LOCK TABLES, REPLICATION CLIENT ON *.* TO backup@localhost IDENTIFIED BY '...';
+dbuser="root"
+
+cd $bd
+
+# Count how many incrementals there are since the last full backup.
+incrementals=0
+last_backup=
+while read info_file; do
+    if qpress -do $info_file | grep -q -s 'incremental = N'; then
+        incrementals=0
+    elif qpress -do $info_file | grep -q -s 'incremental = Y'; then
+        ((++incrementals))
+    else
+        echo "Couldn't determine whether $info_file is incremental" 1>&2
+        exit 1
+    fi
+    last_backup=${info_file%%/*}
+done < <(ls */xtrabackup_info.qp */mariadb_backup_info.qp 2>/dev/null | sort)
+
+$verbose && echo There have been $incrementals incremental backups since the \
+    last full backup.
+
+args="--backup --no-version-check --compress --user=$dbuser"
+
+if ! $full && [ -n "$last_backup" ] && ((incrementals < max_incremental)); then
+    $verbose && echo Performing incremental backup
+    args="$args --incremental-basedir='$bd/$last_backup'"
+else
+    $verbose && echo Performing full backup
+fi
+
+subdir=$(date --rfc-3339=seconds | sed 's/ /_/g')
+args="$args --target-dir='$bd/$subdir'"
+
+if $verbose; then
+    logfile=/dev/stdout
+else
+    logfile=/tmp/db-backup.$$.log
+fi
+
+if ! eval mariabackup $args >| $logfile 2>&1; then
+    $verbose || cat $logfile 1>&2
+    echo 1>&2
+    echo mariabackup $args failed\! 1>&2
+    exit 1
+fi
+
+# Clean up excessive backups
+num_full=0
+deleting=false
+while read info_file; do
+    if $deleting; then
+        $verbose && echo Removing ${info_file%%/*}
+        rm -rf ${info_file%%/*}
+        continue
+    fi
+    if qpress -do $info_file | grep -q -s 'incremental = N'; then
+        ((++num_full))
+        if ((num_full == max_full)); then
+            deleting=true
+        fi
+    elif qpress -do $info_file | grep -q -s 'incremental = Y'; then
+        :
+    else
+        echo "Couldn't determine whether $info_file is incremental" 1>&2
+        exit 1
+    fi
+done < <(ls */xtrabackup_info.qp */mariadb_backup_info.qp 2>/dev/null | sort -r)

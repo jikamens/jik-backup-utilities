@@ -1,57 +1,65 @@
-- hosts: bkuptarget.example.com
+- hosts: bkuptarget
   tasks:
-  - include_tasks: '{{inventory_dir}}/jailkit/tasks/install_jailkit.yml'
+  - name: run jailkit tasks
+    include_tasks: '{{inventory_dir}}/jailkit/tasks/install_jailkit.yml'
 
-- hosts: bkupsource.example.com
+- hosts: main_server
   tasks:
-  - command: ssh-keygen -f /root/.ssh/id_backup -N ''
+  - name: create /root/.ssh/id_backup
+    command: ssh-keygen -f /root/.ssh/id_backup -N ''
     args:
       creates: /root/.ssh/id_backup
-  - fetch:
+  - name: fetch /root/.ssh/id_backup.pub
+    changed_when: false
+    fetch:
       src: /root/.ssh/id_backup.pub
       dest: /tmp
 
-- hosts: bkuptarget.example.com
+- hosts: bkuptarget
   tasks:
-  - command: jk_init -j /home/bkupuser rsync jk_lsh
+  - name: jk_init
+    command: jk_init -j /home/bkupuser rsync jk_lsh
     args:
       creates: /home/bkupuser/usr/bin/rsync
-  - file:
+  - name: create /home/bkupuser/home
+    file:
       path: /home/bkupuser/home
       state: directory
-  - user:
+  - name: create bkupuser user
+    user:
       user: bkupuser
       home: /home/bkupuser/./home/bkupuser
       shell: /usr/sbin/jk_chrootsh
-  - file:
+  - name: create /home/bkupuser/home/bkupuser/.ssh
+    file:
       path: /home/bkupuser/home/bkupuser/.ssh
       state: directory
-  - file:
-      path: /mnt/backup/bkupsource
+  - name: create /d/backup/bkupsource
+    file:
+      path: /d/backup/bkupsource
       owner: bkupuser
       state: directory
-  - file:
+  - name: create /home/bkupuser/home/bkupuser/backup
+    file:
       path: /home/bkupuser/home/bkupuser/backup
       owner: bkupuser
       state: directory
-  - copy:
-      src: /tmp/bkupsource.example.com/root/.ssh/id_backup.pub
+  - name: install id_backup.pub in bkupuser home directory
+    copy:
+      src: /tmp/bkupsource.{{email_domain}}/root/.ssh/id_backup.pub
       dest: /home/bkupuser/home/bkupuser/.ssh/authorized_keys
-  - replace:
+  - name: configure jk_lsh.ini
+    replace:
       dest: /home/bkupuser/etc/jailkit/jk_lsh.ini
       regexp: '## example for a user.*'
       replace: '[DEFAULT]\nexecutables=/usr/bin/rsync\npaths=/usr/bin'
     register: lsh_ini
-  - command: grep -q -s bkupuser /home/bkupuser/etc/passwd
+  - name: check if user is jailed
+    command: grep -q -s bkupuser /home/bkupuser/etc/passwd
     register: user_is_jailed
     ignore_errors: yes
     changed_when: no
-  - command: jk_jailuser -j /home/bkupuser bkupuser
-    when: user_is_jailed is failed
-  - lineinfile:
-      dest: /etc/fstab
-      line: '/mnt/backup/bkupsource /home/bkupuser/home/bkupuser/backup none bind'
-    register: fstabchanged
-  - command: mount /home/bkupuser/home/bkupuser/backup
-    when: fstabchanged.changed
+  - name: jail user
+    command: jk_jailuser -j /home/bkupuser bkupuser
+    when: user_is_jailed.rc != 0
 

@@ -15,8 +15,9 @@ My computing environment has the following data locations that need to
 be backed up:
 
 * a [Linode server][linode] which runs my mail server, my blog, my
-  wife's blog, an NNTP server, some databases (MongoDB, MySQL) that I
-  care about, and moderation software for several Usenet newsgroups;
+  wife's business website, an NNTP server, some databases (MongoDB,
+  MariaDB) that I care about, and moderation software for several
+  Usenet newsgroups;
 
 * an iMac which my kids keep files on indiscriminately without paying
   any attention to whether they're on the local hard drive or in a
@@ -26,7 +27,7 @@ be backed up:
   other important data that we don't want to use, and some data that
   we don't particularly care about; and
 
-* my Linux desktop computer, which has some other MongoDB and MySQL
+* my Linux desktop computer, which has some other MongoDB and MariaDB
   databases that I care about, and my home directory that I care a lot
   about.
 
@@ -83,28 +84,29 @@ solutions offered by [Backblaze][backblaze].
 
 1. My Linode server backs itself up daily using [rsync][rsync] (with a
    large, hand-crafted exclude list) over SSH into a chroot jail on my
-   home desktop, into free space on my Linux desktop. This is all
-   configured via Ansible playbooks so it's self-documenting and can
-   be reconstructed easily if needed.
+   home desktop. This is all configured via Ansible playbooks so it's
+   self-documenting and can be reconstructed easily if needed.
 
-2. The family iMac backs itself up automatically via Time Machine to
-   an external USB drive, and also backs itself up daily exactly to m
-   Linux desktop exactly the same as the Linode server (though with a
-   different exclude list, obviously).
+2. The family iMac backs itself up automatically daily to my Linux
+   desktop like the Linode server does, though with a very different
+   exclude list.
 
 3. I consider our Synology NAS to be its own on-site backup, given
    that it's configured to use redundant RAID so I won't lose any data
    if one of its hard drives fails as long as I replace the drive
    before a second one fails.
 
-4. I export my PostgreSQL and MongoDB databases nightly into a format
-   on which is easier to do reliable incremental backups than the
-   output of mongodump, mongoexport, or mysqldump.
+4. I export my MongoDB databases nightly into a format on which it is
+   easier to do reliable incremental backups than the output of
+   `mongodump` or `mongoexport`.
 
-5. The important data on my Linux desktop is backed up nightly using
+5. I do nightly incremental backups of my MariaDB databases with
+   `mariadump`.
+   
+6. The important data on my Linux desktop is backed up nightly using
    rsync onto a separate drive.
 
-6. I wrote a wrapper around Rclone which reads a simple configuration
+7. I wrote a wrapper around Rclone which reads a simple configuration
    file and follows the instructions in it -- including Rclone filter
    rules -- to back up a local directory into an encrypted B2 bucket.
    The script also knows how to explicitly verify files in the backup
@@ -113,14 +115,14 @@ solutions offered by [Backblaze][backblaze].
    that it is doing what it claims, I have read my own verification
    code, and it is simple enough to be easy to understand).
 
-7. A nightly cron job on my Linux desktop calls several instances of
+8. A nightly cron job on my Linux desktop calls several instances of
    the Rclone wrapper script on different configuration files to run
    several backups and verifications in parallel. Some of these
    backups are of directories on my NAS which are mounted on my Linux
    desktop via either CIFS or NFS.
 
-8. I used to hae my B2 bucket configured to preserve deleted files for
-   a year before purging them automatically, but now I use
+9. I used to have my B2 bucket configured to preserve deleted files
+   for a year before purging them automatically, but now I use
    `backblaze-prune-backups` as described below to implement flexible
    backup expiration rules.
 
@@ -130,9 +132,9 @@ more as an example than as running code, and you'll probably need to
 either use it as inspiration for writing your own stuff, or slice and
 dice it a bit to get it working. While I'm happy to provide this code
 to people who can benefit from it, I do not have the time or energy to
-help you get this code working for other you. This is not intended to
-be plug-and-play; rather it's intended to be an assist for people who
-can read this code and know what to do with it themselves.
+help you get this code working for you. This is not intended to be
+plug-and-play; rather it's intended to be an assist for people who can
+read this code and know what to do with it themselves.
 
 ### A note about cron
 
@@ -140,9 +142,9 @@ As described above and in more detail below, all of my automated
 backup stuff is driven by cron. Cron captures the output of jobs that
 it runs and emails them to the owner of the job. It's important to
 ensure that email on your machine is configured in such a way that
-these emails will be delivered successfully rather than lost into a
-black hole. Otherwise, you won't know if your backup scripts are
-generating errors and failing!
+these emails are delivered successfully rather than lost into a black
+hole. Otherwise, you won't know if your backup scripts are generating
+errors and failing!
 
 In addition to ensuring that your computer is configured to deliver
 email sent by cron, you also need to ensure that cron is sending
@@ -176,7 +178,8 @@ You will find the following files here which illustrate how this is
 done:
 
 * [`install_jailkit.yml`](install_jailkit.yml) is the Ansible playbook
-  I use to install Jailkit on the backup target host.
+  I use to install Jailkit on the backup target host. Note that it
+  needs the variable `jailkit_version` set in your inventory.
 
 * [`jk_init_fixer.py`](jk_init_fixer.py) is a script called by
   `install_jailkit.yml` to fix `/etc/jailkit/jk_init.ini` after it is
@@ -257,32 +260,21 @@ Note that I include all of `/var/lib/mongodb` in my on-site backups
 done via rsync, since rsync is smart about scanning these files for
 changed blocks and only copying them over into the backup. This
 incremental export is only used for the off-site backups done via
-Rclone to B2. This is necessary (as I understand it) because Rclone
-isn't as good as rsync is at doing block-based incremental backups.
+Rclone to B2. This is necessary because Rclone isn't as good as rsync
+is at doing block-based incremental backups.
 
 I run this script on the databases I want to export in a cron job that
 runs every night prior to my Rclone backup job.
 
-### Exporting MySQL databases to an incremental-backup-friendly format
+### Using `mariadump` to back up MariaDB databases
 
-The [mysql-dump-splitter.pl](mysql-dump-splitter.pl) script plays a
-role similar to mongo-incremental-export.py, but for MySQL databases.
-Basically, it reads mysqldump output on stdin or from a file specified
-on the command line and splits it into separate files in the current
-directory, such that each table in the dump is in a separate file.
-These files are numbered and can easily be recombined with cat to
-recreate the original dump file which can be executed as a SQL script
-to recreate the database.
-
-The splitting makes it more likely -- albeit not guaranteed -- that
-Rclone will be able to back up the data incrementally.
-
-I run mysqldump and feed the output into this script from a nightly
-cron job that runs before my Rclone backup job.
-
-Just like for MongoDB, I actually back up all of `/var/lib/mysql` in
-my on-site backups; the purpose of this split backup is for more
-efficient off-site backup.
+The file `mariadb-backup-cron` shows the script I put into
+`/etc/cron.daily` on my machines that have MariaDB databases I care
+about. This script creates daily incremental backups of the databases,
+periodically taking a full backup so we don't have a long chain of
+incrementals that goes on forever, and periodically pruning old
+backups. This directory is then backed up daily into the cloud with
+`rclone` as described elsewhere in this file.
 
 ### Wrapper script around rclone
 
@@ -463,7 +455,7 @@ backups in my `/etc/rclone-backups` directory:
 * the family photo / video archive, mounted from the NAS
 
 Note that all of these backup sources are stable, i.e., none of them
-is being actively modified while the nightly rclone backups are
+are being actively modified while the nightly rclone backups are
 running. This is important to avoid false errors during the backup
 verification step.
 

@@ -351,7 +351,7 @@ sub verify {
     else {
         print("Verify successful\n") if ($verbose);
     }
-    exit $errors ? 1 : 0;
+    exit($errors ? 1 : 0);
 }
 
 sub archive_special_files {

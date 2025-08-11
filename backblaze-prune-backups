@@ -61,6 +61,7 @@ policies = {
 # to match (according to `fnmatch.fnmatch`) the start of the file path it's
 # being compared to.
 path_policies = {
+    '*/.git/': 'one_week',
     'archives/': 'one_year',
     'isos/': 'one_year',
     'mac-backup/*/Applications/': 'one_week',
@@ -185,7 +186,7 @@ def delete_one_file(args, account_id, api_key, decoded_path, path, timestamp,
             logger.debug('Waiting for worker to become available')
         else:
             logger.debug(f'Starting new thread ({len(daemon_threads)} active)')
-            t = threading.Thread(target=delete_worker,
+            t = threading.Thread(target=delete_worker_wrapper,
                                  args=(args, account_id, api_key),
                                  daemon=True)
             daemon_threads.add(t)
@@ -198,6 +199,13 @@ def delete_one_file(args, account_id, api_key, decoded_path, path, timestamp,
     worker_queue.append((decoded_path, path, timestamp, file_id))
     worker_queue_lock.release()
     worker_queue_semaphore.release()
+
+
+def delete_worker_wrapper(args, account_id, api_key):
+    try:
+        delete_worker(args, account_id, api_key)
+    except Exception:
+        logger.exception('Exception from delete worker')
 
 
 def delete_worker(args, account_id, api_key):
@@ -403,10 +411,11 @@ def clean_threads(args, final=False):
 
 
 def do_unfinished_large_files(args, b2, bucket_id):
-    now = datetime.datetime.utcnow()
+    now = datetime.datetime.now(tz=datetime.UTC)
     a_day_ago = now - datetime.timedelta(days=1)
     for f in b2.list_unfinished_large_files(bucket_id):
-        when = datetime.datetime.fromtimestamp(f['uploadTimestamp'] / 1000)
+        when = datetime.datetime.fromtimestamp(f['uploadTimestamp'] / 1000,
+                                               tz=datetime.UTC)
         if when > a_day_ago:
             if args.verbose:
                 print('Skipping unfinished large file {}, last modified {}'.

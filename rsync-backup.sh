@@ -82,7 +82,9 @@ cat >> $D/filter <<EOF
 - /etc/udev/hwdb.bin
 - /home/jane/.tmda/logs/*
 - /home/jane/.tmda/pending/*
+- /home/*/Mail/badnews*
 - /home/*/Mail/bogospam*
+- /home/*/Mail/goodnews*
 - /home/*/Mail/notspam*
 - /home/*/Mail/spamindex
 - /home/john/rpmbuild/BUILD
@@ -109,10 +111,13 @@ cat >> $D/filter <<EOF
 - /var/lib/imap
 - /var/lib/mlocate
 - /var/lib/mongo/diagnostic.data
+- /var/lib/mongo/journal
 - /var/lib/news/history.*
 - /var/lib/news/suck/suck.lock*
 - /var/lib/news/suck/suck.newrc*
 - /var/lib/php/session
+- /var/lib/selinux
+- /var/lib/sss
 - /var/lib/webalizer/dns_cache.db
 - /var/lib/yum
 - /usr/local/share/man

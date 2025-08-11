@@ -68,7 +68,14 @@ class B2API(object):
         try:
             retry_after = int(response.headers['Retry-After'])
         except KeyError:
-            print(response.headers)
+            retry_after = None
+        # This isn't in the `except` block above because we don't want to
+        # clutter the stack trace.
+        if retry_after is None:
+            self.log_warning(f'Error response info: {response.raw.info()}')
+            self.log_warning(f'Error response status: '
+                             f'{response.status_code} {response.reason}')
+            self.log_warning(f'Error response content: {response.text}')
             response.raise_for_status()
         with self.throttle_lock:
             until = time.time() + retry_after
